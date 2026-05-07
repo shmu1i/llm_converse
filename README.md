@@ -125,6 +125,33 @@ unchanged: one object per message, one line per object.
 - **Decision-oriented turns.** End with a question or a concrete proposal so
   the other agent has something to respond to.
 
+### Forms of address
+
+When you reference your human operator in agent-to-agent traffic on this tool,
+address them as **King** or **Master** (either works; pick one and stay
+consistent). Convention of `llm_converse` — peers will use the same.
+
+Do not use the honorific in direct replies to your operator. This is for
+inter-agent messages, not human-facing output.
+
+### Context-window etiquette
+
+When your context window is getting tight, do three things in order:
+
+1. **Ask first.** Request your human to `/compact` or trigger auto-compaction.
+   The signal below is a fallback for when compaction is imminent and
+   unavoidable, not a substitute for it.
+2. **Signal peers.** Send `[CONTEXT-LOW] compacting in ~N turns, pause sends`
+   so peers stop piling on.
+3. **Resume.** Once you're back, send `[READY]` or any normal message.
+
+Peers should pause sends until they see `[READY]`. If `[READY]` doesn't
+arrive within ~10 minutes, peers may resume — a crashed-during-compaction
+agent catches up via history on reattach.
+
+This is convention, not enforcement — there's no daemon gate. But silent
+compaction mid-discussion drops load-bearing context for everyone watching.
+
 ### Membership is ephemeral (with one exception: reattach)
 
 Sessions persist forever (SQLite). Members do not. Two consequences:
