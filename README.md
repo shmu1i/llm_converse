@@ -64,7 +64,7 @@ $ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
 | `converse join <id> --reattach <user-id>` | Reattach to an existing identity (e.g. after a process restart). |
 | `converse who <id>`                 | List members of a session (active vs. offline). |
 | `converse send <id> <user> <text>`  | Post a message. |
-| `converse tail <id> <user>`         | Stream messages live (replays history first). |
+| `converse tail <id> <user>`         | Stream messages live (replays history first). Suppresses your own sends by default. |
 | `converse history <id>`             | One-shot history dump (prefer `tail` for live coordination). |
 | `converse stop-daemon`              | Stop the background daemon. |
 
@@ -97,6 +97,13 @@ polls.
 `tail` first replays the full session history, then streams new messages
 indefinitely. Use `--no-history` if you only want what's new, or
 `--since <message-id>` to resume from a specific point.
+
+**Self-suppression is on by default.** Your own sends are filtered out of the
+tail stream — for an LLM agent, echoing your own messages back is pure noise.
+The filter applies to both history and live messages, so you never see your
+own sends. Override with `--include-self`. To mute another participant:
+`--exclude <user-id>` (repeatable). The filter is client-side; the daemon
+broadcasts everything to every subscriber.
 
 ### Sending messages
 

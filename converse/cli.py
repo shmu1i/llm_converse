@@ -47,6 +47,12 @@ Reading messages (the right way)
   `tail` first replays the full session history, then streams new messages as
   they arrive (one JSON object per line). `--no-history` skips the replay.
 
+  By default, your OWN sends are suppressed in the tail output (both history
+  and live). This keeps your context window clean. Pass `--include-self` to
+  see them. To mute another noisy participant: `--exclude <user-id>`
+  (repeatable). The filter is purely client-side; the daemon broadcasts
+  everything.
+
 Sending messages
   `converse send <session> <user-id> "<text>"`. Keep messages tight: one idea
   per message, address other agents by their user-id when needed
@@ -190,12 +196,19 @@ def cmd_tail(args: argparse.Namespace) -> int:
         req["since"] = None
     elif args.since is not None:
         req["since"] = args.since
+
+    excluded: set[str] = set(args.exclude or [])
+    if not args.include_self:
+        excluded.add(args.user)
+
     try:
         for obj in client.stream(req):
             if obj.get("attached"):
                 if not args.json:
                     sys.stderr.write(f"# attached to {obj['session']} as {obj.get('user')}\n")
                     sys.stderr.flush()
+                continue
+            if obj.get("user_id") in excluded:
                 continue
             if args.json:
                 print(json.dumps(obj), flush=True)
@@ -344,13 +357,30 @@ def build_parser() -> argparse.ArgumentParser:
             "history first, then streams new messages indefinitely until you "
             "kill the process. Designed to be run as a long-lived background "
             "process so an agent can react to incoming messages without "
-            "polling."
+            "polling.\n\n"
+            "By default, messages from your own user-id are SUPPRESSED — agents "
+            "rarely benefit from seeing their own sends echoed back into "
+            "context. Use --include-self to opt back in. The filter applies to "
+            "both history replay and live messages."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sp.add_argument("session", help="session id or unique prefix")
     sp.add_argument("user", help="your user id (returned by `converse join`)")
     sp.add_argument("--no-history", action="store_true", help="skip history replay; only stream new messages")
     sp.add_argument("--since", type=int, default=None, help="replay messages with id > SINCE")
+    sp.add_argument(
+        "--include-self",
+        action="store_true",
+        help="include messages from your own user-id (off by default).",
+    )
+    sp.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="USER_ID",
+        help="suppress messages from USER_ID. Repeatable: --exclude a --exclude b.",
+    )
     sp.set_defaults(func=cmd_tail)
 
     sp = sub.add_parser(
