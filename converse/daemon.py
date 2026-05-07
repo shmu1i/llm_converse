@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import fcntl
 import logging
 import os
 import signal
@@ -349,13 +350,36 @@ async def serve() -> None:
         log.info("daemon stopped")
 
 
+def _acquire_singleton_lock() -> int | None:
+    """Hold an exclusive flock on paths.lock_path() for this process's lifetime.
+
+    Returns the held fd on success, or None if another daemon already holds
+    the lock. The fd is intentionally not closed — kernel releases it when
+    the process exits, which is exactly the lifetime we want.
+    """
+    fd = os.open(str(paths.lock_path()), os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
 def run() -> None:
     logging.basicConfig(
         filename=str(paths.log_path()),
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # write pid
+    # Singleton guard. Without this, a slow ping in client.ensure_daemon
+    # respawns a duplicate that hijacks the socket path, leaving the
+    # original bound to an unreachable inode and silently rotting every
+    # tail connected to it.
+    lock_fd = _acquire_singleton_lock()
+    if lock_fd is None:
+        log.info("another daemon already holds the singleton lock; exiting")
+        return
     pid = paths.pid_path()
     try:
         pid.write_text(str(os.getpid()))

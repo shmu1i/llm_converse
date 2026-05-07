@@ -28,6 +28,12 @@ def pid_path() -> Path:
     return _runtime_dir() / "daemon.pid"
 
 
+def lock_path() -> Path:
+    d = _runtime_dir()
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d / "daemon.lock"
+
+
 def log_path() -> Path:
     d = _data_dir()
     d.mkdir(parents=True, exist_ok=True)

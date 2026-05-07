@@ -1,5 +1,6 @@
 """Synchronous Unix-socket client. Reused by the CLI."""
 
+import contextlib
 import os
 import socket
 import subprocess
@@ -23,42 +24,41 @@ def _connect(timeout: float = 2.0) -> socket.socket:
 
 
 def ensure_daemon(timeout: float = 5.0) -> None:
-    """Make sure a daemon is reachable. Spawn one if not."""
+    """Make sure a daemon is reachable. Spawn one if not.
+
+    Never unlinks the socket itself: the daemon's serve() handles stale
+    socket files on the spawn path, and unlinking a path bound to a
+    healthy-but-busy daemon would break new connects to it. Spawning a
+    duplicate is safe — run() holds an exclusive flock so duplicates
+    exit immediately.
+    """
     sock = paths.socket_path()
-    if sock.exists():
-        try:
-            with _connect(timeout=0.3) as s:
-                s.sendall(protocol.encode({"op": protocol.OP_PING}))
-                _readline(s)
-            return
-        except (OSError, socket.timeout):
-            try:
-                sock.unlink()
-            except FileNotFoundError:
-                pass
-
-    # spawn detached daemon
-    log = open(paths.log_path(), "ab")
-    subprocess.Popen(
-        [sys.executable, "-m", "converse", "--daemon"],
-        stdout=log,
-        stderr=log,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-        env=os.environ.copy(),
-    )
-
     deadline = time.monotonic() + timeout
+    spawned = False
     while time.monotonic() < deadline:
         if sock.exists():
             try:
-                with _connect(timeout=0.3) as s:
+                with _connect(timeout=1.0) as s:
                     s.sendall(protocol.encode({"op": protocol.OP_PING}))
                     _readline(s)
                 return
-            except OSError:
-                pass
+            except (ConnectionRefusedError, FileNotFoundError):
+                pass  # nothing listening — fall through to spawn
+            except (OSError, socket.timeout):
+                time.sleep(0.05)
+                continue  # busy / transient — retry the ping
+        if not spawned:
+            log = open(paths.log_path(), "ab")
+            subprocess.Popen(
+                [sys.executable, "-m", "converse", "--daemon"],
+                stdout=log,
+                stderr=log,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env=os.environ.copy(),
+            )
+            spawned = True
         time.sleep(0.05)
     raise DaemonError("daemon failed to start (see logs at %s)" % paths.log_path())
 
@@ -123,8 +123,14 @@ def stream(req: dict) -> Iterator[dict]:
         s.close()
 
 
-def stop_daemon() -> bool:
-    """Send SIGTERM to the running daemon if there is one."""
+def stop_daemon(timeout: float = 5.0) -> bool:
+    """Send SIGTERM to the running daemon and wait for it to actually exit.
+
+    Without the wait, an immediate ensure_daemon() can race the dying
+    daemon: socket may still exist, lock not yet released, listener
+    half-closed. Polling pid liveness keeps the stop -> restart sequence
+    deterministic.
+    """
     pid_file = paths.pid_path()
     if not pid_file.exists():
         return False
@@ -134,10 +140,15 @@ def stop_daemon() -> bool:
         return False
     try:
         os.kill(pid, 15)
-        return True
     except ProcessLookupError:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             pid_file.unlink()
-        except FileNotFoundError:
-            pass
         return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return True
