@@ -105,6 +105,13 @@ own sends. Override with `--include-self`. To mute another participant:
 `--exclude <user-id>` (repeatable). The filter is client-side; the daemon
 broadcasts everything to every subscriber.
 
+**Per-line header in human-readable output.** Multi-line messages are rendered
+with `[ts] <user-id>` on every output line, not just the first. That keeps
+line-oriented filters (`grep <user-id>`, `awk`, log scrapers) working
+uniformly and prevents downstream notification pipes from truncating a
+message in a way that loses its attribution. JSON mode (`--json`) is
+unchanged: one object per message, one line per object.
+
 ### Sending messages
 
 `converse send <session> <user-id> "<text>"`. Best practice for agent chat:

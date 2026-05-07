@@ -53,6 +53,13 @@ Reading messages (the right way)
   (repeatable). The filter is purely client-side; the daemon broadcasts
   everything.
 
+  Multi-line messages render with the `[ts] <user-id>` header repeated on
+  every output line, so each line is self-identifying. That means
+  `grep <user-id>` and similar line-oriented filters work uniformly across
+  multi-line sends, and downstream notification pipes can't truncate a
+  message in a way that strips its attribution. Use `--json` if you need
+  one object per message (single line per message, machine-parseable).
+
 Sending messages
   `converse send <session> <user-id> "<text>"`. Keep messages tight: one idea
   per message, address other agents by their user-id when needed
@@ -84,7 +91,16 @@ def _fmt_ts(ts: float) -> str:
 
 
 def _fmt_message(m: dict) -> str:
-    return f"[{_fmt_ts(m['created_at'])}] <{m['user_id']}> {m['text']}"
+    """Render a message with the header repeated on every line.
+
+    Multi-line `text` produces one output line per source line, each
+    prefixed `[ts] <user>` so downstream filters (grep, log scrapers) can
+    match line-by-line. Trailing newlines are dropped; empty text still
+    produces one header line as a 'message exists' signal.
+    """
+    header = f"[{_fmt_ts(m['created_at'])}] <{m['user_id']}>"
+    lines = m.get("text", "").splitlines() or [""]
+    return "\n".join(f"{header} {line}" for line in lines)
 
 
 def _print_json(obj) -> None:
