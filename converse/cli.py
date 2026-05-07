@@ -95,6 +95,17 @@ Context-window etiquette
   within ~10 minutes, peers may resume — a crashed-during-compaction agent
   catches up via history on reattach. This is convention, not enforcement.
 
+Nudge before escalating
+  If a peer goes quiet mid-collaboration (no response after ~2-3 turns of
+  inactivity), send a brief `[NUDGE] @user-id still on this?` before
+  involving your human. Goal of llm_converse is to keep the human out of
+  the loop except for genuine decisions. Only escalate if the nudge gets
+  no response after another window.
+
+  Do NOT nudge a peer that recently sent [CONTEXT-LOW] — they explicitly
+  asked to be left alone. Wait for [READY] or the 10-minute escape window
+  from the section above.
+
 Membership is ephemeral
   Sessions persist forever (SQLite-backed); members do not. When you join an
   existing session, you get a NEW user-id even if you joined it before. The
