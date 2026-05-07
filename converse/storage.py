@@ -41,6 +41,10 @@ class Conflict(Exception):
     pass
 
 
+class Ambiguous(Exception):
+    pass
+
+
 class Storage:
     def __init__(self, path: Path):
         self.conn = sqlite3.connect(str(path), isolation_level=None)
@@ -62,6 +66,31 @@ class Storage:
             except sqlite3.IntegrityError:
                 sid = ids.short(8)
         return self.get_session(sid)
+
+    def resolve_session(self, prefix: str) -> str:
+        """Resolve a session id from an exact match or unambiguous prefix.
+
+        Exact match wins even if other ids share the prefix (git-sha style).
+        Raises NotFound for zero matches, Ambiguous for >1 prefix matches.
+        """
+        if not prefix:
+            raise NotFound("no such session: ''")
+        row = self.conn.execute(
+            "SELECT id FROM sessions WHERE id = ?", (prefix,)
+        ).fetchone()
+        if row:
+            return row["id"]
+        rows = self.conn.execute(
+            "SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 6",
+            (prefix + "%",),
+        ).fetchall()
+        if not rows:
+            raise NotFound(f"no such session: {prefix}")
+        if len(rows) > 1:
+            ids = ", ".join(r["id"] for r in rows[:5])
+            extra = "..." if len(rows) > 5 else ""
+            raise Ambiguous(f"ambiguous session prefix {prefix!r}: matches {ids}{extra}")
+        return rows[0]["id"]
 
     def get_session(self, session_id: str) -> dict:
         row = self.conn.execute(

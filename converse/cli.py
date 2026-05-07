@@ -27,6 +27,17 @@ Identifying yourself
   random suffix to keep ids unique. Use the returned user-id verbatim from then
   on; do not invent a new one.
 
+  If your process restarts (token limit, crash, operator kill), DO NOT join
+  with --as again — that creates a new participant from everyone else's
+  perspective and breaks @-references. Instead, reattach to your prior
+  identity:  `converse join <session> --reattach <your-old-user-id>`.
+
+Session ids
+  Anywhere a session id is accepted you may pass an unambiguous PREFIX (like
+  git short-shas). `converse send a3f9 user-x7k2 "hi"` works as long as only
+  one session id starts with `a3f9`. Ambiguous prefixes return an error
+  listing the matches.
+
 Reading messages (the right way)
   Run `converse tail <session> <user-id>` as a long-lived background process.
   In Claude Code, start it with run_in_background=true and use the Monitor tool
@@ -121,16 +132,21 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_join(args: argparse.Namespace) -> int:
-    resp = client.request({
-        "op": protocol.OP_JOIN,
-        "session": args.session,
-        "name": args.name,
-    })
+    if args.reattach and args.name:
+        print("error: --as and --reattach are mutually exclusive", file=sys.stderr)
+        return 2
+    req: dict = {"op": protocol.OP_JOIN, "session": args.session}
+    if args.reattach:
+        req["reattach"] = args.reattach
+    else:
+        req["name"] = args.name
+    resp = client.request(req)
     user = resp["user"]
     if args.json:
         _print_json(user)
     else:
-        print(f"joined {user['session_id']} as {user['id']}")
+        verb = "reattached to" if user.get("reattached") else "joined"
+        print(f"{verb} {user['session_id']} as {user['id']}")
         print("next: converse tail", user["session_id"], user["id"], "(run in background)")
     return 0
 
@@ -248,7 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
         "rename",
         help="change a session's descriptive name",
     )
-    sp.add_argument("session", help="session id")
+    sp.add_argument("session", help="session id or unique prefix")
     sp.add_argument("name", help="new descriptive name (use empty string to clear)")
     sp.set_defaults(func=cmd_rename)
 
@@ -265,19 +281,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser(
         "join",
-        help="join an existing session",
+        help="join an existing session (new identity, or reattach to an old one)",
         description=(
-            "Join a session by id and receive a NEW user identifier. You will "
-            "get a fresh id every time you join, even if you joined this "
-            "session before — membership is ephemeral and not deduplicated."
+            "Join a session by id (full id or unambiguous prefix).\n\n"
+            "Two modes:\n"
+            "  --as <role>          mint a NEW user-id (default).\n"
+            "  --reattach <user-id> resume an existing identity in this session\n"
+            "                       (use this after an agent process restart so\n"
+            "                       references like @claude-backend-7k2x keep\n"
+            "                       pointing at the same actor).\n\n"
+            "The two flags are mutually exclusive. If neither is given, a "
+            "new id with no role prefix is minted."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sp.add_argument("session", help="session id (from `converse list`)")
+    sp.add_argument("session", help="session id or unique prefix (from `converse list`)")
     sp.add_argument(
         "--as",
         dest="name",
         default=None,
-        help="role/name prefix, e.g. `claude-backend`. A random suffix is appended.",
+        help="role/name prefix for a NEW identity, e.g. `claude-backend`. A random suffix is appended.",
+    )
+    sp.add_argument(
+        "--reattach",
+        dest="reattach",
+        default=None,
+        metavar="USER_ID",
+        help="resume an EXISTING user-id in this session (must already be a member).",
     )
     sp.set_defaults(func=cmd_join)
 
@@ -290,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
             "before but are not listening right now."
         ),
     )
-    sp.add_argument("session", help="session id")
+    sp.add_argument("session", help="session id or unique prefix")
     sp.set_defaults(func=cmd_who)
 
     sp = sub.add_parser(
@@ -301,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
             "session will see it immediately."
         ),
     )
-    sp.add_argument("session", help="session id")
+    sp.add_argument("session", help="session id or unique prefix")
     sp.add_argument("user", help="your user id (returned by `converse join`)")
     sp.add_argument("text", nargs="+", help="message text")
     sp.set_defaults(func=cmd_send)
@@ -317,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
             "polling."
         ),
     )
-    sp.add_argument("session", help="session id")
+    sp.add_argument("session", help="session id or unique prefix")
     sp.add_argument("user", help="your user id (returned by `converse join`)")
     sp.add_argument("--no-history", action="store_true", help="skip history replay; only stream new messages")
     sp.add_argument("--since", type=int, default=None, help="replay messages with id > SINCE")
@@ -328,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="print message history once and exit",
         description="One-shot history dump. Prefer `tail` for live coordination.",
     )
-    sp.add_argument("session", help="session id")
+    sp.add_argument("session", help="session id or unique prefix")
     sp.add_argument("--since", type=int, default=None, help="only messages with id > SINCE")
     sp.add_argument("--limit", type=int, default=None, help="max messages to return")
     sp.set_defaults(func=cmd_history)

@@ -61,6 +61,7 @@ $ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
 | `converse rename <id> <name>`       | Change a session's label later. |
 | `converse list`                     | List all sessions, sorted by recent activity. |
 | `converse join <id> --as <role>`    | Join an existing session; returns a fresh user-id. |
+| `converse join <id> --reattach <user-id>` | Reattach to an existing identity (e.g. after a process restart). |
 | `converse who <id>`                 | List members of a session (active vs. offline). |
 | `converse send <id> <user> <text>`  | Post a message. |
 | `converse tail <id> <user>`         | Stream messages live (replays history first). |
@@ -68,6 +69,11 @@ $ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
 | `converse stop-daemon`              | Stop the background daemon. |
 
 Add `--json` to any read command for machine-readable output.
+
+**Session-id prefixes.** Anywhere a session id is accepted you can pass an
+unambiguous prefix (like a git short-sha): `converse send a3f9 alice-x7k2
+"hi"` works as long as only one session id begins with `a3f9`. Ambiguous
+prefixes return an error listing the matches.
 
 ## Guidance for LLM coding agents
 
@@ -105,16 +111,32 @@ indefinitely. Use `--no-history` if you only want what's new, or
 - **Decision-oriented turns.** End with a question or a concrete proposal so
   the other agent has something to respond to.
 
-### Membership is ephemeral
+### Membership is ephemeral (with one exception: reattach)
 
-Sessions persist forever (SQLite). Members do not. Two important consequences:
+Sessions persist forever (SQLite). Members do not. Two consequences:
 
-1. **Joining an old session always gives you a NEW user-id**, even if you joined
-   it before. There is no "log back in as my old self" — that's intentional.
+1. **`--as` always mints a NEW user-id**, even if you joined this session
+   before. By default there is no "log back in as my old self."
 2. **Historical messages may be from offline user-ids.** `converse who`
    distinguishes `active` (currently tailing) from `offline` (joined before
    but not listening now). Don't assume the author of an old message is still
    in the room.
+
+If your agent process restarts mid-conversation (token limit, crash, operator
+kill), use `--reattach <your-old-user-id>` instead of `--as` so other agents'
+@-references keep pointing at the same actor:
+
+```sh
+# original join:
+converse join a3f9b2c1 --as claude-backend
+# → claude-backend-7k2x
+
+# after a restart:
+converse join a3f9b2c1 --reattach claude-backend-7k2x
+# resumes as the SAME identity. Errors if that user-id was never a member.
+```
+
+`--as` and `--reattach` are mutually exclusive.
 
 ### Naming sessions
 

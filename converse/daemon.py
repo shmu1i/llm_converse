@@ -6,7 +6,7 @@ import signal
 import sys
 
 from . import paths, protocol
-from .storage import Conflict, NotFound, Storage
+from .storage import Ambiguous, Conflict, NotFound, Storage
 
 log = logging.getLogger("converse.daemon")
 
@@ -56,7 +56,8 @@ class Daemon:
                     sess = self.storage.create_session(req.get("name"))
                     await self._send(writer, {"session": sess})
                 elif op == protocol.OP_RENAME:
-                    sess = self.storage.rename_session(req["session"], req.get("name"))
+                    sid = self.storage.resolve_session(req["session"])
+                    sess = self.storage.rename_session(sid, req.get("name"))
                     await self._send(writer, {"session": sess})
                 elif op == protocol.OP_LIST:
                     sessions = self.storage.list_sessions()
@@ -64,25 +65,41 @@ class Daemon:
                         s["active_users"] = sorted(self.active_users(s["id"]))
                     await self._send(writer, {"sessions": sessions})
                 elif op == protocol.OP_GET:
-                    sess = self.storage.get_session(req["session"])
-                    sess["active_users"] = sorted(self.active_users(sess["id"]))
+                    sid = self.storage.resolve_session(req["session"])
+                    sess = self.storage.get_session(sid)
+                    sess["active_users"] = sorted(self.active_users(sid))
                     await self._send(writer, {"session": sess})
                 elif op == protocol.OP_JOIN:
-                    user = self.storage.add_user(req["session"], req.get("name"))
-                    await self._send(writer, {"user": user})
+                    sid = self.storage.resolve_session(req["session"])
+                    reattach = req.get("reattach")
+                    if reattach:
+                        if not self.storage.user_exists(sid, reattach):
+                            raise NotFound(
+                                f"user {reattach} does not exist in session {sid} "
+                                "(use --as <role> to create a new identity instead)"
+                            )
+                        await self._send(writer, {"user": {
+                            "id": reattach, "session_id": sid, "reattached": True,
+                        }})
+                    else:
+                        user = self.storage.add_user(sid, req.get("name"))
+                        await self._send(writer, {"user": user})
                 elif op == protocol.OP_WHO:
-                    users = self.storage.list_users(req["session"])
-                    active = self.active_users(req["session"])
+                    sid = self.storage.resolve_session(req["session"])
+                    users = self.storage.list_users(sid)
+                    active = self.active_users(sid)
                     for u in users:
                         u["active"] = u["id"] in active
                     await self._send(writer, {"users": users})
                 elif op == protocol.OP_SEND:
-                    msg = self.storage.add_message(req["session"], req["user"], req["text"])
+                    sid = self.storage.resolve_session(req["session"])
+                    msg = self.storage.add_message(sid, req["user"], req["text"])
                     await self._send(writer, {"ok": True, "message": msg})
-                    await self._broadcast(req["session"], msg)
+                    await self._broadcast(sid, msg)
                 elif op == protocol.OP_HISTORY:
+                    sid = self.storage.resolve_session(req["session"])
                     msgs = self.storage.history(
-                        req["session"],
+                        sid,
                         since_id=req.get("since"),
                         limit=req.get("limit"),
                     )
@@ -93,6 +110,8 @@ class Daemon:
                     await self._send(writer, {"error": f"unknown op: {op!r}"})
             except NotFound as e:
                 await self._send(writer, {"error": str(e), "kind": "not_found"})
+            except Ambiguous as e:
+                await self._send(writer, {"error": str(e), "kind": "ambiguous"})
             except Conflict as e:
                 await self._send(writer, {"error": str(e), "kind": "conflict"})
             except KeyError as e:
@@ -112,10 +131,8 @@ class Daemon:
         writer: asyncio.StreamWriter,
         req: dict,
     ) -> None:
-        session_id = req["session"]
+        session_id = self.storage.resolve_session(req["session"])
         user_id = req.get("user")
-        # validate session exists
-        self.storage.get_session(session_id)
         if user_id and not self.storage.user_exists(session_id, user_id):
             await self._send(writer, {"error": f"user {user_id} is not a member of session {session_id}", "kind": "not_found"})
             return
