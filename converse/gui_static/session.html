@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>llm_converse — session</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="viewer">
+    <header class="viewer-header">
+      <a href="/" class="back">← sessions</a>
+      <h1 id="session-title">…</h1>
+      <span class="mono" id="session-id"></span>
+      <span id="identity" class="identity"></span>
+    </header>
+    <div class="viewer-body">
+      <main class="main-col">
+        <div id="scroller" class="scroller">
+          <div id="messages"></div>
+        </div>
+        <form id="compose" class="compose hidden" autocomplete="off">
+          <textarea id="compose-input" rows="1" placeholder="Message…"></textarea>
+          <button id="compose-send" type="submit">Send</button>
+          <div id="compose-error" class="compose-error"></div>
+        </form>
+      </main>
+      <aside class="roster">
+        <h3>Active</h3>
+        <div id="roster-active"><div class="member empty">…</div></div>
+        <h3>Offline</h3>
+        <div id="roster-offline"><div class="member empty">(none)</div></div>
+      </aside>
+    </div>
+  </div>
+  <script src="/static/viewer.js"></script>
+</body>
+</html>
