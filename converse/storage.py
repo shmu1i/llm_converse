@@ -1,3 +1,4 @@
+import contextlib
 import sqlite3
 import time
 from pathlib import Path
@@ -30,6 +31,16 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS messages_session_idx
     ON messages(session_id, id);
+
+CREATE TABLE IF NOT EXISTS leases (
+    session_id  TEXT NOT NULL,
+    resource    TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    expires_at  REAL NOT NULL,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (session_id, resource),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 """
 
 
@@ -170,6 +181,74 @@ class Storage:
             "text": text,
             "created_at": ts,
         }
+
+    def acquire_lease(
+        self, session_id: str, user_id: str, resource: str, ttl: float,
+    ) -> tuple[str, dict]:
+        """Atomically acquire or extend a lease.
+
+        Returns ('acquired', lease) on success (new claim or extension by holder),
+        or ('conflict', current_lease) if another live holder owns the resource.
+        """
+        if not self.user_exists(session_id, user_id):
+            raise NotFound(f"user {user_id} is not a member of session {session_id}")
+        now = time.time()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            row = self.conn.execute(
+                "SELECT user_id, expires_at, created_at FROM leases "
+                "WHERE session_id = ? AND resource = ?",
+                (session_id, resource),
+            ).fetchone()
+            if row and row["expires_at"] > now and row["user_id"] != user_id:
+                self.conn.execute("ROLLBACK")
+                return ("conflict", {
+                    "session_id": session_id,
+                    "resource": resource,
+                    "user_id": row["user_id"],
+                    "expires_at": row["expires_at"],
+                    "created_at": row["created_at"],
+                })
+            created_at = row["created_at"] if (row and row["user_id"] == user_id and row["expires_at"] > now) else now
+            expires_at = now + ttl
+            self.conn.execute(
+                "INSERT OR REPLACE INTO leases "
+                "(session_id, resource, user_id, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, resource, user_id, expires_at, created_at),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                self.conn.execute("ROLLBACK")
+            raise
+        return ("acquired", {
+            "session_id": session_id,
+            "resource": resource,
+            "user_id": user_id,
+            "expires_at": expires_at,
+            "created_at": created_at,
+        })
+
+    def release_lease(self, session_id: str, user_id: str, resource: str) -> bool:
+        """Release a lease iff held by user_id. Idempotent (returns False if not held)."""
+        cur = self.conn.execute(
+            "DELETE FROM leases WHERE session_id = ? AND resource = ? AND user_id = ?",
+            (session_id, resource, user_id),
+        )
+        return cur.rowcount > 0
+
+    def list_leases(self, session_id: str) -> list[dict]:
+        """List currently-active (non-expired) leases for a session. Lazy expiry."""
+        self.get_session(session_id)
+        now = time.time()
+        rows = self.conn.execute(
+            "SELECT session_id, resource, user_id, expires_at, created_at "
+            "FROM leases WHERE session_id = ? AND expires_at > ? "
+            "ORDER BY resource",
+            (session_id, now),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def history(self, session_id: str, since_id: int | None = None, limit: int | None = None) -> list[dict]:
         self.get_session(session_id)

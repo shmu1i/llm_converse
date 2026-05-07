@@ -11,6 +11,9 @@ from .storage import Ambiguous, Conflict, NotFound, Storage
 
 LEAVE_DEBOUNCE_SECS = 2.0
 
+LEASE_TTL_DEFAULT = 60.0
+LEASE_TTL_MAX = 3600.0
+
 log = logging.getLogger("converse.daemon")
 
 
@@ -55,6 +58,27 @@ class Daemon:
             if sub is exclude_sub:
                 continue
             await sub.queue.put(message)
+
+    async def _announce_join(self, session_id: str, user_id: str) -> None:
+        """Broadcast a join event for user_id to peers if it's not already active.
+
+        Called from OP_JOIN so peers see joins even when the joining client never
+        tails (e.g. the GUI human-join flow). Idempotent for reattach-while-active
+        and silent for clean reattach within the leave debounce window.
+        """
+        if user_id in self.active_users(session_id):
+            return
+        key = (session_id, user_id)
+        pending = self.pending_leaves.pop(key, None)
+        if pending is not None and not pending.done():
+            pending.cancel()
+            return
+        await self._broadcast(session_id, {
+            "event": "join",
+            "session": session_id,
+            "user_id": user_id,
+            "ts": time.time(),
+        })
 
     async def _debounced_leave(
         self, session_id: str, user_id: str, key: tuple[str, str],
@@ -118,9 +142,11 @@ class Daemon:
                         await self._send(writer, {"user": {
                             "id": reattach, "session_id": sid, "reattached": True,
                         }})
+                        await self._announce_join(sid, reattach)
                     else:
                         user = self.storage.add_user(sid, req.get("name"))
                         await self._send(writer, {"user": user})
+                        await self._announce_join(sid, user["id"])
                 elif op == protocol.OP_WHO:
                     sid = self.storage.resolve_session(req["session"])
                     users = self.storage.list_users(sid)
@@ -141,6 +167,50 @@ class Daemon:
                         limit=req.get("limit"),
                     )
                     await self._send(writer, {"messages": msgs})
+                elif op == protocol.OP_LEASE_ACQUIRE:
+                    sid = self.storage.resolve_session(req["session"])
+                    user_id = req["user"]
+                    resource = req["resource"]
+                    ttl_raw = req.get("ttl")
+                    ttl = LEASE_TTL_DEFAULT if ttl_raw is None else float(ttl_raw)
+                    if ttl <= 0 or ttl > LEASE_TTL_MAX:
+                        await self._send(writer, {
+                            "error": f"ttl out of range (0, {LEASE_TTL_MAX}]",
+                        })
+                    else:
+                        status, lease = self.storage.acquire_lease(sid, user_id, resource, ttl)
+                        await self._send(writer, {
+                            "acquired": status == "acquired",
+                            "lease": lease,
+                        })
+                        if status == "acquired":
+                            await self._broadcast(sid, {
+                                "event": "claim",
+                                "session": sid,
+                                "user_id": user_id,
+                                "resource": resource,
+                                "expires_at": lease["expires_at"],
+                                "ttl": ttl,
+                                "ts": time.time(),
+                            })
+                elif op == protocol.OP_LEASE_RELEASE:
+                    sid = self.storage.resolve_session(req["session"])
+                    user_id = req["user"]
+                    resource = req["resource"]
+                    released = self.storage.release_lease(sid, user_id, resource)
+                    await self._send(writer, {"released": released})
+                    if released:
+                        await self._broadcast(sid, {
+                            "event": "release",
+                            "session": sid,
+                            "user_id": user_id,
+                            "resource": resource,
+                            "ts": time.time(),
+                        })
+                elif op == protocol.OP_LEASES:
+                    sid = self.storage.resolve_session(req["session"])
+                    leases = self.storage.list_leases(sid)
+                    await self._send(writer, {"leases": leases})
                 elif op == protocol.OP_TAIL:
                     await self._handle_tail(reader, writer, req)
                 else:
@@ -191,20 +261,16 @@ class Daemon:
                     "ts": now,
                 })
 
-        # broadcast our join to peers, unless we're cancelling a recent leave
-        # (a debounced reattach within LEAVE_DEBOUNCE_SECS — silent on the wire).
+        # Cancel any pending leave-debounce for our user-id (silent reattach
+        # within LEAVE_DEBOUNCE_SECS). The join broadcast itself lives in
+        # OP_JOIN (_announce_join) — tail-time announcement would double-
+        # broadcast in the common join-then-tail flow. Cancellation has to
+        # stay here too so a tail-only reattach (e.g. `converse tail` after
+        # a process restart, no fresh OP_JOIN) doesn't emit a stale leave.
         if fresh and user_id:
-            key = (session_id, user_id)
-            pending = self.pending_leaves.pop(key, None)
+            pending = self.pending_leaves.pop((session_id, user_id), None)
             if pending is not None and not pending.done():
                 pending.cancel()
-            else:
-                await self._broadcast_to_others(session_id, sub, {
-                    "event": "join",
-                    "session": session_id,
-                    "user_id": user_id,
-                    "ts": now,
-                })
 
         # replay history unless since was set explicitly to skip
         since = req.get("since", 0)
