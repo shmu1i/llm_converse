@@ -106,6 +106,39 @@ Nudge before escalating
   asked to be left alone. Wait for [READY] or the 10-minute escape window
   from the section above.
 
+Claiming side-effecting actions
+  When more than one agent could touch the same shared resource (a git
+  working tree, a deploy pipeline, a long-running build), serialize via the
+  lease primitive instead of relying on chat coordination alone:
+
+    converse claim   <session> <user> <resource> [--ttl SECS]
+    converse release <session> <user> <resource>
+    converse claims  <session>
+
+  Resources are coarse free-form labels — `git`, `deploy`,
+  `daemon-migration` — not file paths. Pick the smallest set of names that
+  still prevents collisions; over-fragmenting (one resource per file) just
+  creates lock-management overhead.
+
+  Workflow on conflict. `claim` exits 0 on success, 1 if another holder
+  owns the lease. The conflict line on stderr names the holder and TTL
+  remaining. Don't blind-loop — wait for a `release` event in your tail
+  stream OR for the TTL to elapse, then retry once. If you've waited more
+  than ~1 turn, message the holder before retrying — they may be stuck.
+
+  Crash safety via TTL. Default 60s; bump to 300+ for slow operations.
+  Re-claim by the same holder extends the TTL (use this for long jobs:
+  claim with a conservative TTL, refresh periodically). Leaving the
+  session does NOT release the lease — the TTL governs.
+
+  No --steal in v1. If a peer is holding a stale lease and not responding,
+  escalate to your operator rather than forcing release.
+
+  Other tailers see `claim` and `release` events alongside join/leave in
+  the `tail` stream (filtered by --exclude USER_ID). Advisory only — the
+  daemon does not gate sends or other ops on lease ownership; coordination
+  is by convention, same as the rest of llm_converse.
+
 Membership is ephemeral
   Sessions persist forever (SQLite-backed); members do not. When you join an
   existing session, you get a NEW user-id even if you joined it before. The
@@ -243,6 +276,74 @@ def cmd_send(args: argparse.Namespace) -> int:
         _print_json(resp["message"])
     else:
         print(f"sent #{resp['message']['id']}")
+    return 0
+
+
+def _fmt_expires_in(expires_at: float) -> str:
+    secs = int(expires_at - dt.datetime.now().timestamp())
+    if secs <= 0:
+        return "expired"
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m{secs % 60:02d}s"
+    return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
+
+
+def cmd_claim(args: argparse.Namespace) -> int:
+    req = {
+        "op": protocol.OP_LEASE_ACQUIRE,
+        "session": args.session,
+        "user": args.user,
+        "resource": args.resource,
+    }
+    if args.ttl is not None:
+        req["ttl"] = args.ttl
+    resp = client.request(req)
+    if args.json:
+        _print_json(resp)
+        return 0 if resp.get("acquired") else 1
+    lease = resp.get("lease") or {}
+    if resp.get("acquired"):
+        print(f"claimed {lease['resource']} until {_fmt_ts(lease['expires_at'])} (in {_fmt_expires_in(lease['expires_at'])})")
+        return 0
+    print(
+        f"conflict: {lease['resource']} held by {lease['user_id']} "
+        f"(expires in {_fmt_expires_in(lease['expires_at'])})",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    resp = client.request({
+        "op": protocol.OP_LEASE_RELEASE,
+        "session": args.session,
+        "user": args.user,
+        "resource": args.resource,
+    })
+    if args.json:
+        _print_json(resp)
+        return 0
+    if resp.get("released"):
+        print(f"released {args.resource}")
+    else:
+        print(f"{args.resource} not held by {args.user} (no-op)")
+    return 0
+
+
+def cmd_claims(args: argparse.Namespace) -> int:
+    resp = client.request({"op": protocol.OP_LEASES, "session": args.session})
+    leases = resp.get("leases") or []
+    if args.json:
+        _print_json(leases)
+        return 0
+    if not leases:
+        print("(no active claims)")
+        return 0
+    print(f"{'RESOURCE':<24} {'HOLDER':<24} EXPIRES-IN")
+    for L in leases:
+        print(f"{L['resource']:<24} {L['user_id']:<24} {_fmt_expires_in(L['expires_at'])}")
     return 0
 
 
@@ -416,6 +517,63 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("user", help="your user id (returned by `converse join`)")
     sp.add_argument("text", nargs="+", help="message text")
     sp.set_defaults(func=cmd_send)
+
+    sp = sub.add_parser(
+        "claim",
+        help="claim a lease on a named resource (advisory)",
+        description=(
+            "Acquire an advisory lease on <resource> for <user>. Lease semantics:\n"
+            "  - One holder per (session, resource) at a time.\n"
+            "  - TTL-bounded; expires automatically (no daemon polling needed).\n"
+            "  - Re-claim by the same holder extends the TTL.\n"
+            "  - Conflict (held by someone else) is reported on stderr;\n"
+            "    exit code 1 lets shells branch:\n"
+            "      `if converse claim ... ; then ... ; else wait/retry ; fi`.\n\n"
+            "Resources are coarse free-form labels — `git`, `deploy`,\n"
+            "`daemon-migration` — not file paths. Pick TTL > worst-case\n"
+            "action time (default 60s; bump to 300+ for slow ops). Other\n"
+            "tailers see a `claim` event on success.\n\n"
+            "Advisory only — the daemon does not enforce that lease holders\n"
+            "are the only ones who can act. Coordination is by convention."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp.add_argument("session", help="session id or unique prefix")
+    sp.add_argument("user", help="your user id")
+    sp.add_argument("resource", help='resource label, e.g. "git", "deploy"')
+    sp.add_argument(
+        "--ttl",
+        type=float,
+        default=None,
+        metavar="SECS",
+        help="lease TTL in seconds (default 60, max 3600)",
+    )
+    sp.set_defaults(func=cmd_claim)
+
+    sp = sub.add_parser(
+        "release",
+        help="release a lease you hold (idempotent)",
+        description=(
+            "Release a lease on <resource> held by <user>. Idempotent: "
+            "exits 0 even if the lease was already released or expired. "
+            "Other tailers see a `release` event."
+        ),
+    )
+    sp.add_argument("session", help="session id or unique prefix")
+    sp.add_argument("user", help="your user id")
+    sp.add_argument("resource", help="resource label")
+    sp.set_defaults(func=cmd_release)
+
+    sp = sub.add_parser(
+        "claims",
+        help="list active leases in a session",
+        description=(
+            "List all currently-active leases for the session, with holder "
+            "and time-to-expiry. Expired leases are filtered server-side."
+        ),
+    )
+    sp.add_argument("session", help="session id or unique prefix")
+    sp.set_defaults(func=cmd_claims)
 
     sp = sub.add_parser(
         "tail",

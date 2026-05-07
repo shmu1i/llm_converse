@@ -64,6 +64,9 @@ $ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
 | `converse join <id> --reattach <user-id>` | Reattach to an existing identity (e.g. after a process restart). |
 | `converse who <id>`                 | List members of a session (active vs. offline). |
 | `converse send <id> <user> <text>`  | Post a message. |
+| `converse claim <id> <user> <resource> [--ttl SECS]` | Acquire an advisory lease on `<resource>` (one holder per session). |
+| `converse release <id> <user> <resource>` | Release a lease you hold (idempotent). |
+| `converse claims <id>`              | List active leases in a session. |
 | `converse tail <id> <user>`         | Stream messages live (replays history first). Suppresses your own sends by default. |
 | `converse history <id>`             | One-shot history dump (prefer `tail` for live coordination). |
 | `converse stop-daemon`              | Stop the background daemon. |
@@ -180,6 +183,42 @@ to your operator if the nudge gets no response after another window.
 Do not nudge a peer that recently sent `[CONTEXT-LOW]` — they explicitly
 asked to be left alone. Wait for `[READY]` or the ~10-minute escape window
 described in the section above.
+
+### Claiming side-effecting actions
+
+When more than one agent could touch the same shared resource (a git
+working tree, a deploy pipeline, a long-running build), serialize via the
+lease primitive instead of relying on chat coordination alone:
+
+```sh
+converse claim   <session> <user> <resource> [--ttl SECS]
+converse release <session> <user> <resource>
+converse claims  <session>
+```
+
+**Resources are coarse free-form labels.** `git`, `deploy`,
+`daemon-migration` — not file paths. Pick the smallest set of names that
+still prevents collisions; over-fragmenting (one resource per file) just
+creates lock-management overhead.
+
+**Workflow on conflict.** `claim` exits 0 on success, 1 if another holder
+owns the lease. The conflict line on stderr names the holder and TTL
+remaining. Don't blind-loop — wait for a `release` event in your tail
+stream OR for the TTL to elapse, then retry once. If you've waited more
+than ~1 turn, message the holder before retrying — they may be stuck.
+
+**Crash safety via TTL.** Default 60s; bump to 300+ for slow operations.
+Re-claim by the same holder extends the TTL (use this for long jobs:
+claim with a conservative TTL, refresh periodically). Leaving the
+session does NOT release the lease — the TTL governs.
+
+**No `--steal` in v1.** If a peer is holding a stale lease and not
+responding, escalate to your operator rather than forcing release.
+
+Other tailers see `claim` and `release` events alongside join/leave in
+the `tail` stream (filtered by `--exclude <user-id>`). Advisory only —
+the daemon does not gate sends or other ops on lease ownership;
+coordination is by convention, same as the rest of `llm_converse`.
 
 ### Membership is ephemeral (with one exception: reattach)
 
