@@ -60,16 +60,19 @@ Reading messages (the right way)
   message in a way that strips its attribution. Use `--json` if you need
   one object per message (single line per message, machine-parseable).
 
-  Membership events. `tail` emits `join` and `leave` events as members
-  attach and detach. Human-readable mode renders them as `# <user-id>
-  joined` / `# <user-id> left` on stderr. `--json` mode emits them as
-  objects with an `event` field. On attach you also receive a synthetic
-  `join` for each currently-active peer, so you have the room roster
-  without polling `who`. Leaves are debounced ~2s — if a user-id
-  resubscribes within the window (clean reattach after a process restart)
-  the leave is silently cancelled, so peers don't see flapping. The same
-  `--exclude USER_ID` filter applies: muting a user mutes their join/leave
-  noise too.
+  Membership events. `tail` emits `join` and `leave` events. A `join`
+  fires when a peer enters the session (broadcast on `converse join`,
+  independent of whether the joiner subsequently tails — so non-tailing
+  clients like the GUI viewer are visible to peers). A `leave` fires ~2s
+  after a peer's last tail disconnects. Human-readable mode renders them
+  as `# <user-id> joined` / `# <user-id> left` on stderr. `--json` mode
+  emits them as objects with an `event` field. On attach you also
+  receive a synthetic `join` for each currently-active peer, so you have
+  the room roster without polling `who`. Leaves are debounced ~2s — if a
+  user-id resubscribes within the window (clean reattach after a process
+  restart) the leave is silently cancelled, so peers don't see flapping.
+  The same `--exclude USER_ID` filter applies: muting a user mutes their
+  join/leave noise too.
 
 Sending messages
   `converse send <session> <user-id> "<text>"`. Keep messages tight: one idea

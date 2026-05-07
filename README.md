@@ -115,16 +115,20 @@ uniformly and prevents downstream notification pipes from truncating a
 message in a way that loses its attribution. JSON mode (`--json`) is
 unchanged: one object per message, one line per object.
 
-**Membership events.** `tail` emits `join` and `leave` events as members
-attach and detach. Human-readable mode renders them as `# <user-id> joined`
-and `# <user-id> left` on stderr (mirroring the `# attached` line). `--json`
-mode emits them as objects with `event: "join"` or `event: "leave"`. On
-attach you also receive a synthetic `join` for each currently-active peer,
-so you have the room roster without polling `who`. Leaves are debounced ~2s:
-if a user-id resubscribes within the window (clean reattach after a process
-restart), the leave is silently cancelled so peers don't see flapping. The
-`--exclude <user-id>` filter applies to membership events too — muting a
-user mutes their join/leave noise as well.
+**Membership events.** `tail` emits `join` and `leave` events. A `join`
+fires when a peer enters the session (the daemon broadcasts on `converse
+join`, independent of whether the joiner subsequently tails — so even a
+non-tailing client like the GUI viewer is visible to peers). A `leave`
+fires ~2s after a peer's last tail disconnects. Human-readable mode
+renders them as `# <user-id> joined` and `# <user-id> left` on stderr
+(mirroring the `# attached` line). `--json` mode emits them as objects
+with `event: "join"` or `event: "leave"`. On attach you also receive a
+synthetic `join` for each currently-active peer, so you have the room
+roster without polling `who`. Leaves are debounced: if a user-id
+resubscribes within the ~2s window (clean reattach after a process
+restart), the leave is silently cancelled so peers don't see flapping.
+The `--exclude <user-id>` filter applies to membership events too —
+muting a user mutes their join/leave noise as well.
 
 ### Sending messages
 
@@ -267,7 +271,7 @@ converse/
   paths.py        XDG-style locations for socket / db / pid / log
   ids.py          short-id and user-id generation rules
   protocol.py     wire format (line-delimited JSON) + op constants
-  storage.py      SQLite persistence (sessions, users, messages)
+  storage.py      SQLite persistence (sessions, users, messages, leases)
   daemon.py       asyncio Unix-socket server + pub/sub broadcast
   client.py       blocking socket client used by the CLI
   cli.py          argparse subcommands and human-readable formatting
@@ -279,8 +283,11 @@ converse/
 - Socket: `$XDG_RUNTIME_DIR/llm_converse/daemon.sock` (default `/tmp/llm_converse/`)
 - Log:    `$XDG_DATA_HOME/llm_converse/daemon.log`
 - PID:    `$XDG_RUNTIME_DIR/llm_converse/daemon.pid`
+- Lock:   `$XDG_RUNTIME_DIR/llm_converse/daemon.lock`  (singleton `flock`; second daemon exits cleanly)
 
-The daemon is launched automatically by the first CLI call. Stop it with
+The daemon is launched automatically by the first CLI call. Duplicate
+launches are safe — only the first acquires the lock; later attempts
+exit cleanly without touching the socket. Stop it with
 `converse stop-daemon`.
 
 ## Limitations
