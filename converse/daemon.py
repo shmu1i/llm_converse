@@ -116,6 +116,9 @@ class Daemon:
                     await self._send(writer, {"ok": True})
                 elif op == protocol.OP_NEW:
                     sess = self.storage.create_session(req.get("name"))
+                    preamble = req.get("preamble")
+                    if preamble:
+                        self.storage.add_system_message(sess["id"], preamble)
                     await self._send(writer, {"session": sess})
                 elif op == protocol.OP_RENAME:
                     sid = self.storage.resolve_session(req["session"])
@@ -158,6 +161,11 @@ class Daemon:
                 elif op == protocol.OP_SEND:
                     sid = self.storage.resolve_session(req["session"])
                     msg = self.storage.add_message(sid, req["user"], req["text"])
+                    await self._send(writer, {"ok": True, "message": msg})
+                    await self._broadcast(sid, msg)
+                elif op == protocol.OP_PREAMBLE_ADD:
+                    sid = self.storage.resolve_session(req["session"])
+                    msg = self.storage.add_system_message(sid, req["text"])
                     await self._send(writer, {"ok": True, "message": msg})
                     await self._broadcast(sid, msg)
                 elif op == protocol.OP_HISTORY:

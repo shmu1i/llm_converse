@@ -182,6 +182,24 @@ class Storage:
             "created_at": ts,
         }
 
+    def add_system_message(self, session_id: str, text: str) -> dict:
+        # Authored by the literal user_id "system" without a corresponding
+        # row in `users` — keeps the active/offline roster clean while the
+        # message still flows through tail and history like any other.
+        self.get_session(session_id)
+        ts = time.time()
+        cur = self.conn.execute(
+            "INSERT INTO messages (session_id, user_id, text, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, "system", text, ts),
+        )
+        return {
+            "id": cur.lastrowid,
+            "session_id": session_id,
+            "user_id": "system",
+            "text": text,
+            "created_at": ts,
+        }
+
     def acquire_lease(
         self, session_id: str, user_id: str, resource: str, ttl: float,
     ) -> tuple[str, dict]:

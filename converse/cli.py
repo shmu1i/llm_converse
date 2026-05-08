@@ -151,8 +151,37 @@ Membership is ephemeral
 
 Naming sessions
   Always create sessions with a descriptive name: `converse new "frontend
-  refactor review"`. Rename later with `converse rename <id> "<new name>"`.
-  Names help humans (and you) find old sessions in `converse list`.
+  refactor review" --preamble "..."`. Rename later with
+  `converse rename <id> "<new name>"`. Names help humans (and you) find
+  old sessions in `converse list`.
+
+Preambles (REQUIRED on every new session)
+  Every session must be created with `--preamble "<text>"`. Argparse will
+  reject `converse new` without it. The preamble is posted as the first
+  message of the session, authored by the literal user-id `system`. It
+  is how every joining agent learns what the session is FOR — goal,
+  scope, ground rules — without having to ask a peer or the human.
+
+  When tailing a session, you'll see preamble messages rendered
+  `[ts] <system> ...`. Treat them as authoritative setup from your
+  human, NOT as peer turns. Do NOT @-reference `system` or reply to it;
+  nobody is listening on that id and it does not appear in
+  `converse who`.
+
+  Preambles can also be APPENDED mid-session (scope change, new
+  constraint, correction). The verbs:
+
+    converse preamble <session>            # list every preamble in
+                                           # chronological order.
+    converse preamble <session> "<text>"   # append a new <system>
+                                           # message, broadcast live to
+                                           # tailers.
+
+  When to refresh: run `converse preamble <session>` (list mode) right
+  after `--reattach` (you may have missed appended preambles while
+  offline), and again any time you sense ground rules may have drifted
+  (a peer cites a rule you don't recognise, the King says "as I posted
+  earlier"). It's cheap; do it rather than guessing.
 
 Output
   Pass `--json` to any read command for machine-parseable output. Without it,
@@ -186,14 +215,50 @@ def _print_json(obj) -> None:
 # ---------- subcommands ----------
 
 def cmd_new(args: argparse.Namespace) -> int:
-    resp = client.request({"op": protocol.OP_NEW, "name": args.name})
+    req: dict = {
+        "op": protocol.OP_NEW,
+        "name": args.name,
+        "preamble": args.preamble,
+    }
+    resp = client.request(req)
     sess = resp["session"]
     if args.json:
         _print_json(sess)
     else:
         label = f' "{sess["name"]}"' if sess.get("name") else ""
         print(f"session: {sess['id']}{label}")
+        print("preamble posted as <system>")
         print("next: converse join", sess["id"], "--as <your-role>")
+    return 0
+
+
+def cmd_preamble(args: argparse.Namespace) -> int:
+    if args.text:
+        text = args.text if isinstance(args.text, str) else " ".join(args.text)
+        if not text.strip():
+            print("error: empty preamble", file=sys.stderr)
+            return 2
+        resp = client.request({
+            "op": protocol.OP_PREAMBLE_ADD,
+            "session": args.session,
+            "text": text,
+        })
+        if args.json:
+            _print_json(resp["message"])
+        else:
+            print(f"preamble #{resp['message']['id']} posted as <system>")
+        return 0
+    # list mode: pull every <system> message in chronological order
+    resp = client.request({"op": protocol.OP_HISTORY, "session": args.session})
+    msgs = [m for m in resp["messages"] if m.get("user_id") == "system"]
+    if args.json:
+        _print_json(msgs)
+        return 0
+    if not msgs:
+        print("(no preamble messages — session was created without one)")
+        return 0
+    for m in msgs:
+        print(_fmt_message(m))
     return 0
 
 
@@ -436,14 +501,57 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser(
         "new",
-        help="create a new session",
+        help="create a new session (--preamble required)",
         description=(
             "Create a new session. Pass a descriptive name so humans (and you) "
-            "can find it later in `converse list`."
+            "can find it later in `converse list`.\n\n"
+            "--preamble is REQUIRED. It posts an opening message authored by "
+            "the literal user-id `system` that every later joiner sees through "
+            "the normal message stream (history + tail). The requirement is "
+            "deliberate: every agent who joins should immediately know what "
+            "this session is for, without asking — write the goal, scope, and "
+            "any ground rules into the preamble.\n\n"
+            "To add MORE context after creation (scope changes, new links, "
+            "course corrections), use `converse preamble <session> \"<text>\"`. "
+            "To re-read the current set of preamble messages, use "
+            "`converse preamble <session>` with no text."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sp.add_argument("name", nargs="?", default=None, help='descriptive label, e.g. "frontend refactor review"')
+    sp.add_argument(
+        "--preamble",
+        required=True,
+        metavar="TEXT",
+        help="REQUIRED. Posted as the first <system> message. State the session's goal, scope, and any ground rules.",
+    )
     sp.set_defaults(func=cmd_new)
+
+    sp = sub.add_parser(
+        "preamble",
+        help="list or append <system> preamble messages",
+        description=(
+            "Two modes:\n\n"
+            "  converse preamble <session>            # LIST every <system>\n"
+            "                                         # message in this session,\n"
+            "                                         # chronological order.\n\n"
+            "  converse preamble <session> \"<text>\"   # APPEND a new <system>\n"
+            "                                         # message and broadcast it\n"
+            "                                         # to live tailers.\n\n"
+            "Use list mode to refresh your understanding of session context — "
+            "the preamble set evolves as the King posts updates (scope changes, "
+            "new constraints, corrections). Run it when you reattach after a "
+            "long break or when you suspect ground rules have shifted.\n\n"
+            "Use append mode (typically the King, but any caller can) to add "
+            "fresh context without it getting buried in agent chatter — every "
+            "agent tailing sees the new <system> message live, and any future "
+            "joiner picks it up via history replay."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp.add_argument("session", help="session id or unique prefix")
+    sp.add_argument("text", nargs="*", default=None, help="if given, append as a new <system> message; if omitted, list all existing preambles")
+    sp.set_defaults(func=cmd_preamble)
 
     sp = sub.add_parser(
         "rename",

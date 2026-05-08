@@ -37,9 +37,11 @@ Requires Python 3.10+. No third-party dependencies.
 ## Quickstart
 
 ```sh
-# 1. create a session with a descriptive name
-$ converse new "frontend refactor review"
+# 1. create a session — descriptive name + REQUIRED --preamble
+$ converse new "frontend refactor review" \
+    --preamble "Goal: review src/auth/. King wants a green CI before merge."
 session: a3f9b2c1 "frontend refactor review"
+preamble posted as <system>
 next: converse join a3f9b2c1 --as <your-role>
 
 # 2. each agent joins, getting a unique user-id
@@ -57,7 +59,8 @@ $ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
 
 | Command | Purpose |
 | --- | --- |
-| `converse new [name]`               | Create a session. `name` is a human-friendly label. |
+| `converse new [name] --preamble TEXT` | Create a session. `--preamble` is REQUIRED — posts the opening `<system>` message every joiner sees. |
+| `converse preamble <id> ["text"]`   | List every `<system>` message (no text), or append a new one (with text). |
 | `converse rename <id> <name>`       | Change a session's label later. |
 | `converse list`                     | List all sessions, sorted by recent activity. |
 | `converse join <id> --as <role>`    | Join an existing session; returns a fresh user-id. |
@@ -261,6 +264,51 @@ converse rename a3f9b2c1 "auth refactor — closed 2026-05"
 ```
 
 `converse list` is your friend for finding existing sessions to rejoin.
+
+### Session preamble (required)
+
+`--preamble` is **required** on every `converse new`. It guarantees that
+every agent who joins the session knows what the session is FOR — goal,
+scope, ground rules — without having to ask a peer or the human.
+
+```sh
+converse new "auth refactor" --preamble \
+  "Goal: replace cookie-session with JWT in src/auth/. King cares about
+   zero-downtime cutover. Style: claim git before touching shared files."
+```
+
+The preamble is stored as a regular message authored by the literal user-id
+`system`. Every agent that joins later sees it via `converse history` /
+`converse tail` with no special handling.
+
+**For agents reading the stream:** when you tail and see `[ts] <system> ...`,
+treat it as authoritative setup from the human who created the session.
+Do NOT @-reference `system` or reply to it as if it were a peer; `system`
+does not appear in `converse who` and nobody is listening on that id.
+
+#### Adding more preambles mid-session
+
+Sessions evolve. Scope changes, new constraints arrive, the King wants to
+correct something without it getting buried in agent chatter. Append more
+`<system>` messages with `converse preamble`:
+
+```sh
+# append a new preamble — broadcast live to every tailing agent
+$ converse preamble a3f9b2c1 "Scope expanded: also rewrite /api/v2/login."
+preamble #87 posted as <system>
+
+# list every preamble in the session, chronological order
+$ converse preamble a3f9b2c1
+[2026-05-08 10:14:02] <system> Goal: replace cookie-session with JWT in src/auth/. ...
+[2026-05-08 12:45:31] <system> Scope expanded: also rewrite /api/v2/login.
+```
+
+**Agents: refresh on demand.** Run `converse preamble <session>` (list mode):
+- right after `--reattach` — you may have missed appended preambles while offline
+- any time a peer or the King cites a rule you don't recognise
+- before a major decision, to confirm the current ground rules
+
+It's cheap; do it rather than guessing.
 
 ## File layout
 
