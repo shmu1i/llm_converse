@@ -32,6 +32,7 @@ html, body {
   background: var(--bg);
   color: var(--fg);
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-x: hidden;     /* off-screen drawer must not extend page width */
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -132,7 +133,8 @@ input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
 .viewer {
   display: grid;
   grid-template-rows: auto 1fr;
-  height: 100vh;
+  height: 100vh;          /* fallback for browsers without dvh */
+  height: 100dvh;         /* dynamic viewport — accounts for mobile URL bar + soft keyboard */
 }
 .viewer-header {
   display: flex;
@@ -141,7 +143,9 @@ input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--card-bg);
+  flex-wrap: wrap;        /* let identity drop to a second row on narrow screens */
 }
+.viewer-header .roster-toggle { display: none; }
 .viewer-header .back {
   font-size: 13px;
   color: var(--muted);
@@ -205,10 +209,49 @@ input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
   display: grid;
   grid-template-columns: 1fr 220px;
   min-height: 0;
+  position: relative;     /* anchor the mobile roster drawer + backdrop */
 }
+.roster-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 9;
+}
+.roster-backdrop.open { display: block; }
+
 @media (max-width: 600px) {
   .viewer-body { grid-template-columns: 1fr; }
-  .roster { display: none; }
+  .viewer-header { padding: 8px 12px; gap: 8px; }
+  .viewer-header h1 { font-size: 15px; }
+  .viewer-header #session-id { display: none; }       /* reclaim header space */
+  .viewer-header .identity {
+    flex-basis: 100%;                                  /* drop to its own row */
+    justify-content: flex-end;
+  }
+  .viewer-header .roster-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: 13px;
+    padding: 6px 12px;
+    min-height: 36px;
+  }
+  /* Roster becomes a slide-in drawer on mobile. */
+  .roster {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(280px, 80vw);
+    z-index: 10;
+    transform: translateX(100%);
+    transition: transform 200ms ease;
+    box-shadow: -2px 0 18px rgba(0, 0, 0, 0.25);
+    padding-top: 18px;
+  }
+  .roster.open { transform: translateX(0); }
 }
 
 .main-col {
@@ -346,4 +389,31 @@ input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
   color: var(--muted);
   font-family: inherit;
   font-style: italic;
+}
+
+/* ---------- mobile polish ---------- */
+@media (max-width: 600px) {
+  /* iOS auto-zooms when an input has font-size < 16px on focus. */
+  input[type="text"], textarea { font-size: 16px; }
+
+  /* Comfortable touch targets across the app. */
+  button { min-height: 40px; padding: 8px 14px; }
+  .identity .join-btn { font-size: 14px; padding: 8px 14px; min-height: 36px; }
+  .identity .join-form input { font-size: 16px; padding: 8px 10px; flex: 1; min-width: 0; width: auto; }
+  .identity .join-form button { font-size: 14px; padding: 8px 12px; min-height: 36px; }
+  .identity .user-pill { font-size: 13px; padding: 6px 8px 6px 12px; }
+  .identity .user-pill .leave-btn { min-height: 0; padding: 4px 10px; font-size: 12px; }
+
+  .compose {
+    padding: 8px 12px max(10px, env(safe-area-inset-bottom));
+    gap: 6px;
+  }
+  .compose textarea { min-height: 40px; padding: 9px 11px; }
+  .compose button { height: auto; min-height: 40px; padding: 8px 16px; }
+
+  .scroller { padding: 12px 14px 10px; }
+  .message { max-width: 100%; }
+
+  .picker { padding: 20px 14px 40px; }
+  .picker h1 { font-size: 22px; }
 }

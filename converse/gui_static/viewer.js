@@ -12,6 +12,9 @@ const composeForm = document.getElementById('compose');
 const composeInput = document.getElementById('compose-input');
 const composeSend = document.getElementById('compose-send');
 const composeError = document.getElementById('compose-error');
+const rosterEl = document.getElementById('roster');
+const rosterToggle = document.getElementById('roster-toggle');
+const rosterBackdrop = document.getElementById('roster-backdrop');
 
 const active = new Set();
 const offline = new Set();
@@ -356,6 +359,21 @@ function formatTime(ts) {
 function scrollIfPinned() {
   if (atBottom) scroller.scrollTop = scroller.scrollHeight;
 }
+
+// ---------- mobile roster drawer ----------
+
+function setRosterOpen(open) {
+  rosterEl.classList.toggle('open', open);
+  rosterBackdrop.classList.toggle('open', open);
+}
+rosterToggle?.addEventListener('click', () => {
+  setRosterOpen(!rosterEl.classList.contains('open'));
+});
+rosterBackdrop?.addEventListener('click', () => setRosterOpen(false));
+// Close the drawer if the viewport grows back to desktop width.
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 600) setRosterOpen(false);
+});
 
 // ---------- init ----------
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>llm_converse — session</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -12,6 +12,7 @@
       <a href="/" class="back">← sessions</a>
       <h1 id="session-title">…</h1>
       <span class="mono" id="session-id"></span>
+      <button type="button" class="roster-toggle" id="roster-toggle" aria-label="Show members">Members</button>
       <span id="identity" class="identity"></span>
     </header>
     <div class="viewer-body">
@@ -25,12 +26,13 @@
           <div id="compose-error" class="compose-error"></div>
         </form>
       </main>
-      <aside class="roster">
+      <aside class="roster" id="roster">
         <h3>Active</h3>
         <div id="roster-active"><div class="member empty">…</div></div>
         <h3>Offline</h3>
         <div id="roster-offline"><div class="member empty">(none)</div></div>
       </aside>
+      <div class="roster-backdrop" id="roster-backdrop"></div>
     </div>
   </div>
   <script src="/static/viewer.js"></script>
