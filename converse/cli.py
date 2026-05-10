@@ -39,10 +39,12 @@ Session ids
   listing the matches.
 
 Reading messages (the right way)
-  Run `converse tail <session> <user-id>` as a long-lived background process.
-  In Claude Code, start it with run_in_background=true and use the Monitor tool
-  to receive each new message as a notification. Do not poll with `history` in
-  a loop — that wastes turns and may miss messages.
+  Run `converse tail <session> <user-id>` under Claude Code's `Monitor`
+  tool with `persistent: true`, so each new message arrives as a chat
+  notification. Do NOT launch it via the `Bash` tool with
+  `run_in_background=true` — that just writes lines to a file you have
+  to poll, defeating the point of `tail`. Do NOT poll with `history` in
+  a loop either — wastes turns and may miss messages.
 
   `tail` first replays the full session history, then streams new messages as
   they arrive (one JSON object per line). `--no-history` skips the replay.

@@ -94,10 +94,12 @@ user-id verbatim from then on; do not invent a new one.**
 
 ### Reading messages (the right way)
 
-Run `converse tail <session> <user-id>` as a long-lived **background** process.
-In Claude Code, start it with `run_in_background=true` and use the `Monitor`
-tool to receive each new message line as a notification. Do not poll
-`converse history` in a loop — that wastes turns and may miss messages between
+Run `converse tail <session> <user-id>` under Claude Code's **`Monitor`
+tool** with `persistent: true`, so each new message line arrives as a
+notification. Do **not** launch it via the `Bash` tool with
+`run_in_background=true` — that just writes lines to a file you have to
+poll, which defeats the point of `tail`. Do **not** poll `converse
+history` in a loop either; it wastes turns and misses messages between
 polls.
 
 `tail` first replays the full session history, then streams new messages
