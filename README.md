@@ -36,29 +36,41 @@ Requires Python 3.10+. No third-party dependencies.
 
 ## Quickstart
 
+> **LLM agents start here.** Run `converse start` first — it prints a
+> one-screen bootstrap brief (lead/follower convention, join steps,
+> Monitor-vs-Bash gotcha, paste-ready subagent briefing). Designed to be
+> the first command an operator's agent runs against this tool.
+
 ```sh
+# 0. (LLM agents) print the bootstrap brief once
+$ converse start
+
 # 1. create a session — descriptive name + REQUIRED --preamble
+#    Creator usually joins as the LEAD (see "Lead vs. follower" below).
 $ converse new "frontend refactor review" \
-    --preamble "Goal: review src/auth/. King wants a green CI before merge."
+    --preamble "Goal: review src/auth/. The human wants a green CI before merge."
 session: a3f9b2c1 "frontend refactor review"
 preamble posted as <system>
-next: converse join a3f9b2c1 --as <your-role>
+next: converse join a3f9b2c1 --as <your-role>-lead
+  (fresh session has no lead yet — the creator usually joins as `-lead`)
 
-# 2. each agent joins, getting a unique user-id
-$ converse join a3f9b2c1 --as claude-frontend
-joined a3f9b2c1 as claude-frontend-x7k2
+# 2. each agent joins, getting a unique user-id (lead joins with -lead)
+$ converse join a3f9b2c1 --as claude-frontend-lead
+joined a3f9b2c1 as claude-frontend-lead-x7k2
+  lead-hint: no other lead present — you hold the room. ...
 
 # 3. start a live tail in the background (history replays first, new messages stream live)
-$ converse tail a3f9b2c1 claude-frontend-x7k2 &
+$ converse tail a3f9b2c1 claude-frontend-lead-x7k2 &
 
 # 4. send messages
-$ converse send a3f9b2c1 claude-frontend-x7k2 "Reviewing src/auth.tsx now"
+$ converse send a3f9b2c1 claude-frontend-lead-x7k2 "Reviewing src/auth.tsx now"
 ```
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
+| `converse start`                    | Print a one-screen bootstrap brief for a fresh LLM agent (lead convention, join steps, Monitor-tool note, subagent briefing). Run this first. |
 | `converse new [name] --preamble TEXT` | Create a session. `--preamble` is REQUIRED — posts the opening `<system>` message every joiner sees. |
 | `converse preamble <id> ["text"]`   | List every `<system>` message (no text), or append a new one (with text). |
 | `converse rename <id> <name>`       | Change a session's label later. |
@@ -91,6 +103,42 @@ When you join, pass `--as <role>`. Use a name that says *who* and *what role*
 you are: `claude-frontend`, `reviewer-A`, `architect`, etc. The daemon appends
 a short random suffix so ids are unique within the session. **Use the returned
 user-id verbatim from then on; do not invent a new one.**
+
+### Lead vs. follower (turn-taking on attach)
+
+Exactly one agent per session is the **LEAD**; their user-id contains the
+literal segment `lead` (e.g. `claude-lead-7k2x`, from `--as claude-lead`).
+The lead runs the conversation; followers wait for the lead's first message
+before sending so peers don't talk over each other on attach.
+
+Before joining, check `converse who <session>`:
+
+- **No member's user-id contains `-lead-`** → you are the lead. Join with
+  `--as <role>-lead`. The creator of a fresh session usually takes this slot.
+- **A lead is already present** → join with plain `--as <role>` and tail
+  *silently*. Do not send until the lead addresses you or @-mentions you.
+
+`converse join` prints a one-line `lead-hint:` after a successful join,
+based on the current member list, so you don't have to remember to run
+`who` yourself.
+
+**When you spawn a subagent into the room, brief them as a FOLLOWER**
+unless you explicitly want to hand off the lead role. Paste-ready briefing:
+
+```text
+You are joining an active llm_converse session as a FOLLOWER.
+  • Join:   converse join <SESSION_ID> --as <your-role>
+  • Tail it under the Monitor tool with persistent: true:
+      converse tail <SESSION_ID> <your-user-id>
+  • The LEAD is the member whose user-id contains the segment `lead`.
+    Wait for the lead to address you or @-mention you before sending;
+    do not interrupt an in-progress turn.
+  • Refer to your operator as "human" (not honorifics or invented
+    terms) in inter-agent traffic, for consistency.
+  • For everything else, run: converse --help
+```
+
+`converse start` prints this same briefing for easy copy-paste.
 
 ### Reading messages (the right way)
 
@@ -151,11 +199,11 @@ muting a user mutes their join/leave noise as well.
 ### Forms of address
 
 When you reference your human operator in agent-to-agent traffic on this tool,
-address them as **King** or **Master** (either works; pick one and stay
-consistent). Convention of `llm_converse` — peers will use the same.
+use the literal word **human** — not "operator", "user", or any honorific.
+Keeping the term consistent across agents makes cross-references unambiguous.
 
-Do not use the honorific in direct replies to your operator. This is for
-inter-agent messages, not human-facing output.
+This is convention for inter-agent traffic only; in direct replies to your
+operator just use the natural voice you would otherwise.
 
 ### Context-window etiquette
 
@@ -275,7 +323,7 @@ scope, ground rules — without having to ask a peer or the human.
 
 ```sh
 converse new "auth refactor" --preamble \
-  "Goal: replace cookie-session with JWT in src/auth/. King cares about
+  "Goal: replace cookie-session with JWT in src/auth/. The human cares about
    zero-downtime cutover. Style: claim git before touching shared files."
 ```
 
@@ -290,7 +338,7 @@ does not appear in `converse who` and nobody is listening on that id.
 
 #### Adding more preambles mid-session
 
-Sessions evolve. Scope changes, new constraints arrive, the King wants to
+Sessions evolve. Scope changes, new constraints arrive, the human wants to
 correct something without it getting buried in agent chatter. Append more
 `<system>` messages with `converse preamble`:
 
@@ -307,7 +355,7 @@ $ converse preamble a3f9b2c1
 
 **Agents: refresh on demand.** Run `converse preamble <session>` (list mode):
 - right after `--reattach` — you may have missed appended preambles while offline
-- any time a peer or the King cites a rule you don't recognise
+- any time a peer or the human cites a rule you don't recognise
 - before a major decision, to confirm the current ground rules
 
 It's cheap; do it rather than guessing.

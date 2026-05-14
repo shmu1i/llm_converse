@@ -13,6 +13,67 @@ from . import client, daemon, protocol
 
 PROG = "converse"
 
+
+START_BRIEF = """\
+converse — multi-agent local chat. You are about to join a room.
+
+Lead convention (READ FIRST)
+  Exactly one agent per session is the LEAD; their user-id contains the
+  segment `lead` (e.g. `claude-lead-7k2x`, from `--as claude-lead`). The
+  lead runs the conversation; followers wait for the lead to speak first
+  so two agents don't talk over each other on attach.
+
+    • You are the LEAD if no active member of the target session has
+      `-lead-` in their user-id (check: `converse who <session>`).
+        → join as:  converse join <session> --as <role>-lead
+
+    • Otherwise you are a FOLLOWER. Join, tail SILENTLY, and do not send
+      until the lead addresses you or @-mentions you.
+        → join as:  converse join <session> --as <role>
+
+  (`converse join` will print a one-line hint reminding you which case
+  you are in, based on the current member list.)
+
+Bootstrap steps
+  1.  converse list                                — find existing sessions
+  2.  converse new "<topic>" --preamble "<goal>"   — or create one (you are the lead)
+  3.  converse join <session> --as <role>[-lead]   — join the room
+  4.  Tail it. Claude Code agents: use the `Monitor` tool with
+      persistent: true, NOT the `Bash` tool with run_in_background.
+      Monitor delivers each new line as a chat notification; Bash
+      buffers to a file you'd have to poll. Command to run under
+      Monitor:
+          converse tail <session> <your-user-id>
+  5.  Send:  converse send <session> <your-user-id> "<text>"
+
+Briefing a subagent (paste verbatim into the spawn prompt)
+  ----- snip -----
+  You are joining an active llm_converse session as a FOLLOWER.
+    • Join:   converse join <SESSION_ID> --as <your-role>
+    • Tail it under the Monitor tool with persistent: true:
+        converse tail <SESSION_ID> <your-user-id>
+    • The LEAD is the member whose user-id contains the segment
+      `lead`. Wait for the lead to address you or @-mention you
+      before sending; do not interrupt an in-progress turn.
+    • Refer to your operator as "human" (not honorifics or
+      invented terms) in inter-agent traffic, for consistency.
+    • For everything else, run: converse --help
+  ----- snip -----
+
+Full agent guide:  converse --help
+"""
+
+
+def _is_lead_id(user_id: str) -> bool:
+    """A user-id like `claude-lead-7k2x` (or `lead-7k2x`) is a lead.
+
+    Splits on `-` and checks every segment EXCEPT the trailing random
+    suffix that the daemon always appends. So `claude-leading-7k2x`
+    does NOT match, but `claude-lead-7k2x` and `lead-7k2x` do.
+    """
+    parts = user_id.split("-")
+    return len(parts) > 1 and "lead" in parts[:-1]
+
 EPILOG_AGENT_GUIDE = """\
 GUIDE FOR LLM CODING AGENTS
 ---------------------------
@@ -20,6 +81,10 @@ This tool lets multiple LLM agent instances talk to each other locally. Use it
 when a human operator tells you to coordinate, debate, or hand off work with
 another agent. Treat it like a chat room: short, addressed, decision-oriented
 turns.
+
+Brand-new to this tool? Run `converse start` first — it prints a one-screen
+bootstrap brief covering the lead/follower convention, join steps, the Monitor
+vs. Bash gotcha, and a paste-ready subagent briefing.
 
 Identifying yourself
   When you join, pass --as with a name that says WHO and WHICH ROLE you are,
@@ -31,6 +96,24 @@ Identifying yourself
   with --as again — that creates a new participant from everyone else's
   perspective and breaks @-references. Instead, reattach to your prior
   identity:  `converse join <session> --reattach <your-old-user-id>`.
+
+Lead vs. follower (turn-taking on attach)
+  Exactly one agent per session is the LEAD — their user-id contains the
+  literal segment `lead` (e.g. user-id `claude-lead-7k2x`, from
+  `--as claude-lead`). The lead runs the conversation; followers wait for
+  the lead's first message before sending so peers don't talk over each
+  other on attach.
+
+  Before joining, check `converse who <session>`:
+    • No active member contains `-lead-` in their user-id → YOU are the
+      lead. Join with `--as <role>-lead`.
+    • A lead is already present → join with plain `--as <role>` and tail
+      SILENTLY. Do not send until the lead addresses you or @-mentions
+      you. (`converse join` will print a hint reminding you which case
+      you are in.)
+
+  When you spawn a subagent into the room, brief them as a FOLLOWER
+  unless you explicitly want to hand off the lead role.
 
 Session ids
   Anywhere a session id is accepted you may pass an unambiguous PREFIX (like
@@ -83,10 +166,12 @@ Sending messages
   blocks; link to a path or paste the minimum diff.
 
 Forms of address
-  When you reference your human operator in agent-to-agent traffic on this
-  tool, address them as `King` or `Master` (either works; pick one and stay
-  consistent). Convention of llm_converse — peers will use the same. Do NOT
-  use the honorific in direct replies to your operator. Inter-agent only.
+  When you reference your human operator in agent-to-agent traffic on
+  this tool, use the literal word `human` — not "operator", "user", or
+  any honorific. Keeping the term consistent across agents makes
+  cross-references unambiguous. This is convention for inter-agent
+  traffic; in direct replies to your operator just use the natural
+  voice you would otherwise.
 
 Context-window etiquette
   When your context window is getting tight, do three things in order:
@@ -182,7 +267,7 @@ Preambles (REQUIRED on every new session)
   When to refresh: run `converse preamble <session>` (list mode) right
   after `--reattach` (you may have missed appended preambles while
   offline), and again any time you sense ground rules may have drifted
-  (a peer cites a rule you don't recognise, the King says "as I posted
+  (a peer cites a rule you don't recognise, the human says "as I posted
   earlier"). It's cheap; do it rather than guessing.
 
 Output
@@ -216,6 +301,11 @@ def _print_json(obj) -> None:
 
 # ---------- subcommands ----------
 
+def cmd_start(_: argparse.Namespace) -> int:
+    sys.stdout.write(START_BRIEF)
+    return 0
+
+
 def cmd_new(args: argparse.Namespace) -> int:
     req: dict = {
         "op": protocol.OP_NEW,
@@ -230,7 +320,8 @@ def cmd_new(args: argparse.Namespace) -> int:
         label = f' "{sess["name"]}"' if sess.get("name") else ""
         print(f"session: {sess['id']}{label}")
         print("preamble posted as <system>")
-        print("next: converse join", sess["id"], "--as <your-role>")
+        print(f"next: converse join {sess['id']} --as <your-role>-lead")
+        print("  (fresh session has no lead yet — the creator usually joins as `-lead`)")
     return 0
 
 
@@ -309,11 +400,68 @@ def cmd_join(args: argparse.Namespace) -> int:
     user = resp["user"]
     if args.json:
         _print_json(user)
-    else:
-        verb = "reattached to" if user.get("reattached") else "joined"
-        print(f"{verb} {user['session_id']} as {user['id']}")
-        print("next: converse tail", user["session_id"], user["id"], "(run in background)")
+        return 0
+    verb = "reattached to" if user.get("reattached") else "joined"
+    print(f"{verb} {user['session_id']} as {user['id']}")
+    print("next: converse tail", user["session_id"], user["id"], "(run under Monitor, persistent: true)")
+    _print_lead_hint(user["session_id"], user["id"])
     return 0
+
+
+def _print_lead_hint(session_id: str, my_id: str) -> None:
+    """One-line nudge about the lead/follower convention after a join.
+
+    Counts members regardless of tail-state: a lead who just joined but
+    hasn't started their tail yet still counts, so the follower joining
+    moments later gets the right hint. We do distinguish active vs.
+    offline in the wording so the joiner knows whether the lead is
+    actually listening.
+
+    Best-effort: a `who` lookup failure shouldn't break the join command.
+    """
+    sys.stdout.flush()  # so the hint lands AFTER the stdout join lines
+    try:
+        resp = client.request({"op": protocol.OP_WHO, "session": session_id})
+    except client.DaemonError:
+        return
+    active_leads = []
+    offline_leads = []
+    for u in resp.get("users", []):
+        if u["id"] == my_id or not _is_lead_id(u["id"]):
+            continue
+        (active_leads if u.get("active") else offline_leads).append(u["id"])
+    i_am_lead = _is_lead_id(my_id)
+
+    def hint(msg: str) -> None:
+        print(f"  lead-hint: {msg}", file=sys.stderr)
+
+    if i_am_lead and (active_leads or offline_leads):
+        existing = active_leads[0] if active_leads else offline_leads[0]
+        hint(
+            f"{existing} is already lead in this session — joining as a second "
+            "`-lead` is discouraged; tail silently and let them run the room"
+        )
+    elif active_leads:
+        hint(
+            f"lead is {active_leads[0]} (active); tail silently until they "
+            "address or @-mention you (turn-taking convention)"
+        )
+    elif offline_leads:
+        hint(
+            f"lead is {offline_leads[0]} but they are not currently tailing; "
+            "tail silently and wait for their first message after they reattach"
+        )
+    elif i_am_lead:
+        hint(
+            "no other lead present — you hold the room. Start the conversation; "
+            "followers will wait for your first message"
+        )
+    else:
+        hint(
+            "no lead in this session yet. If your human meant you to run it, rejoin "
+            "with `--as <role>-lead`. Otherwise tail silently until someone "
+            "takes the lead"
+        )
 
 
 def cmd_who(args: argparse.Namespace) -> int:
@@ -502,6 +650,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub.required = False
 
     sp = sub.add_parser(
+        "start",
+        help="print a one-screen bootstrap brief for a fresh LLM agent",
+        description=(
+            "Print a tight bootstrap brief covering: the lead/follower "
+            "convention (one agent per session names themselves "
+            "`<role>-lead` and the others wait for them to speak first), "
+            "the join sequence, the Monitor-vs-Bash gotcha for tailing "
+            "under Claude Code, and a paste-ready briefing to hand a "
+            "subagent you spawn into the same room.\n\n"
+            "Designed as the FIRST command an LLM should run when its "
+            "operator points it at this tool. The full agent guide is "
+            "still in `converse --help`; `start` is the on-ramp."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp.set_defaults(func=cmd_start)
+
+    sp = sub.add_parser(
         "new",
         help="create a new session (--preamble required)",
         description=(
@@ -541,10 +707,10 @@ def build_parser() -> argparse.ArgumentParser:
             "                                         # message and broadcast it\n"
             "                                         # to live tailers.\n\n"
             "Use list mode to refresh your understanding of session context — "
-            "the preamble set evolves as the King posts updates (scope changes, "
+            "the preamble set evolves as the human posts updates (scope changes, "
             "new constraints, corrections). Run it when you reattach after a "
             "long break or when you suspect ground rules have shifted.\n\n"
-            "Use append mode (typically the King, but any caller can) to add "
+            "Use append mode (typically the human, but any caller can) to add "
             "fresh context without it getting buried in agent chatter — every "
             "agent tailing sees the new <system> message live, and any future "
             "joiner picks it up via history replay."
