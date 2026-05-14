@@ -18,7 +18,7 @@ Wire format
     {type:'message', id, user_id, text, created_at}
     {type:'join'   , user_id, created_at}
     {type:'leave'  , user_id, created_at}
-    {type:'roster' , active:[user_id, ...], created_at}    # sent first
+    {type:'roster' , active:[user_id, ...], offline:[user_id, ...], created_at}    # sent first
 """
 
 import argparse
@@ -148,14 +148,22 @@ class SessionStream:
             first = len(self.subscribers) == 0
             try:
                 wresp = _client.request({"op": _protocol.OP_WHO, "session": self.session_id})
-                active = [
-                    u["id"] for u in wresp.get("users", [])
-                    if u.get("active") and not u["id"].startswith(f"{VIEWER_ROLE}-")
+                members = [
+                    u for u in wresp.get("users", [])
+                    if not u["id"].startswith(f"{VIEWER_ROLE}-")
                 ]
+                active = [u["id"] for u in members if u.get("active")]
+                offline = [u["id"] for u in members if not u.get("active")]
             except _client.DaemonError:
                 active = []
+                offline = []
             try:
-                q.put_nowait({"type": "roster", "active": active, "created_at": time.time()})
+                q.put_nowait({
+                    "type": "roster",
+                    "active": active,
+                    "offline": offline,
+                    "created_at": time.time(),
+                })
             except queue.Full:
                 pass
             try:

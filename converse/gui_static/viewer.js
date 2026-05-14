@@ -180,6 +180,183 @@ composeInput.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- @-mention autocomplete ----------
+// Behaves like WhatsApp/Telegram: typing `@` at a word boundary opens a
+// list of every session member (active + offline), filterable as you
+// type. Arrow keys navigate, Enter/Tab/Click insert, Esc closes. The
+// popup re-renders whenever roster/join/leave events change the room.
+
+const mentionPopup = document.createElement('div');
+mentionPopup.className = 'mention-popup hidden';
+mentionPopup.setAttribute('role', 'listbox');
+composeForm.appendChild(mentionPopup);
+
+let mentionState = null;  // { start, end, query } while popup is open
+
+function mentionMembers() {
+  const all = new Set([...active, ...offline]);
+  return [...all].sort((a, b) => {
+    const aA = active.has(a), bA = active.has(b);
+    if (aA !== bA) return aA ? -1 : 1;     // active first
+    return a.localeCompare(b);
+  });
+}
+
+function detectMention() {
+  const value = composeInput.value;
+  const pos = composeInput.selectionStart;
+  if (pos == null) return null;
+  // Walk backward from cursor over valid mention chars to find the `@`.
+  let i = pos - 1;
+  while (i >= 0 && /[A-Za-z0-9_-]/.test(value[i])) i--;
+  if (i < 0 || value[i] !== '@') return null;
+  // The char before `@` must be whitespace (or `@` is at start), else
+  // this is something like `foo@bar` and not a mention trigger.
+  if (i > 0 && !/\s/.test(value[i - 1])) return null;
+  return { start: i, end: pos, query: value.slice(i + 1, pos) };
+}
+
+function openMentionPopup(state) {
+  // Preserve the user's current selection across re-renders (filter
+  // refinement, roster updates) so arrow-key navigation doesn't bounce
+  // back to the first item.
+  const prevUid = mentionPopup.querySelector('.mention-item.selected')?.dataset.uid;
+  mentionState = state;
+  const q = state.query.toLowerCase();
+  let list = mentionMembers();
+  if (q) list = list.filter(u => u.toLowerCase().startsWith(q));
+  if (!list.length) {
+    mentionPopup.innerHTML = '<div class="mention-empty">no member matches</div>';
+  } else {
+    let selIdx = prevUid ? list.indexOf(prevUid) : -1;
+    if (selIdx < 0) selIdx = 0;
+    mentionPopup.innerHTML = list.map((u, idx) => {
+      const isActive = active.has(u);
+      const isMe = !!(me && u === me.id);
+      const statusLabel = isMe ? 'you' : (isActive ? 'active' : 'offline');
+      return `<div class="mention-item${idx === selIdx ? ' selected' : ''}" data-uid="${escapeHtml(u)}" role="option">
+        <span class="presence-dot ${isActive ? 'online' : 'offline'}"></span>
+        <span class="uid">${escapeHtml(u)}</span>
+        <span class="status">${statusLabel}</span>
+      </div>`;
+    }).join('');
+  }
+  mentionPopup.classList.remove('hidden');
+}
+
+function closeMentionPopup() {
+  if (!mentionState) return;
+  mentionState = null;
+  mentionPopup.classList.add('hidden');
+  mentionPopup.innerHTML = '';
+}
+
+function refreshMentionPopupIfOpen() {
+  if (!mentionState) return;
+  // Re-detect from the current cursor (the underlying text hasn't moved).
+  const state = detectMention();
+  if (state) openMentionPopup(state);
+  else closeMentionPopup();
+}
+
+function moveMentionSelection(delta) {
+  const items = [...mentionPopup.querySelectorAll('.mention-item')];
+  if (!items.length) return;
+  let idx = items.findIndex(el => el.classList.contains('selected'));
+  if (idx === -1) idx = 0;
+  idx = (idx + delta + items.length) % items.length;
+  items.forEach((el, i) => el.classList.toggle('selected', i === idx));
+  items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+function applyMentionItem(el) {
+  if (!mentionState || !el) return;
+  const uid = el.dataset.uid;
+  if (!uid) return;
+  const value = composeInput.value;
+  const before = value.slice(0, mentionState.start);
+  const after = value.slice(mentionState.end);
+  const insertion = '@' + uid + ' ';
+  composeInput.value = before + insertion + after;
+  const pos = before.length + insertion.length;
+  composeInput.setSelectionRange(pos, pos);
+  autoresize(composeInput);
+  closeMentionPopup();
+  composeInput.focus();
+}
+
+composeInput.addEventListener('input', () => {
+  const state = detectMention();
+  if (state) openMentionPopup(state);
+  else closeMentionPopup();
+});
+
+// Cursor-only moves (Left/Right/Home/End, mouse clicks inside the
+// textarea) don't fire 'input', but they can move the cursor out of a
+// live mention region — re-check after they fire. ArrowUp/ArrowDown are
+// deliberately excluded: when the popup is open they navigate the popup
+// (handled in the keydown capture below), and re-running detectMention
+// here would just bounce the selection back to the first item.
+composeInput.addEventListener('keyup', (e) => {
+  if (['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) {
+    if (!mentionState) {
+      const state = detectMention();
+      if (state) openMentionPopup(state);
+    } else {
+      refreshMentionPopupIfOpen();
+    }
+  }
+});
+composeInput.addEventListener('click', () => {
+  const state = detectMention();
+  if (state) openMentionPopup(state);
+  else closeMentionPopup();
+});
+
+// Capture on the form so we run before the input's own bubble-phase
+// submit-on-Enter handler.
+composeForm.addEventListener('keydown', (e) => {
+  if (e.target !== composeInput || !mentionState) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveMentionSelection(1); return; }
+  if (e.key === 'ArrowUp')   { e.preventDefault(); e.stopPropagation(); moveMentionSelection(-1); return; }
+  if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); closeMentionPopup(); return; }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    const sel = mentionPopup.querySelector('.mention-item.selected');
+    if (sel) {
+      e.preventDefault();
+      e.stopPropagation();
+      applyMentionItem(sel);
+    } else {
+      // No matches — close and let Enter fall through to form submit.
+      closeMentionPopup();
+      if (e.key === 'Tab') e.preventDefault();
+    }
+  }
+}, true);
+
+// mousedown (not click) so the action runs before the textarea blur.
+mentionPopup.addEventListener('mousedown', (e) => {
+  const item = e.target.closest('.mention-item');
+  if (item) {
+    e.preventDefault();
+    applyMentionItem(item);
+  }
+});
+mentionPopup.addEventListener('mouseover', (e) => {
+  const item = e.target.closest('.mention-item');
+  if (!item) return;
+  for (const el of mentionPopup.querySelectorAll('.mention-item')) {
+    el.classList.toggle('selected', el === item);
+  }
+});
+
+composeInput.addEventListener('blur', () => {
+  // Delay so a popup click can complete first.
+  setTimeout(() => {
+    if (document.activeElement !== composeInput) closeMentionPopup();
+  }, 150);
+});
+
 composeForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (sending || !me) return;
@@ -250,7 +427,9 @@ function handleEvent(m) {
       active.clear();
       offline.clear();
       for (const u of (m.active || [])) active.add(u);
+      for (const u of (m.offline || [])) offline.add(u);
       renderRoster();
+      refreshMentionPopupIfOpen();
       break;
     case 'join': {
       offline.delete(m.user_id);
@@ -258,6 +437,7 @@ function handleEvent(m) {
       active.add(m.user_id);
       if (!wasActive) appendSystem(`${m.user_id} joined`);
       renderRoster();
+      refreshMentionPopupIfOpen();
       break;
     }
     case 'leave':
@@ -265,6 +445,7 @@ function handleEvent(m) {
       offline.add(m.user_id);
       appendSystem(`${m.user_id} left`);
       renderRoster();
+      refreshMentionPopupIfOpen();
       break;
     case 'message':
       appendMessage(m);
